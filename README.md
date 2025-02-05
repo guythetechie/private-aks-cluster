@@ -1,1 +1,0 @@
-# private-aks-cluster
