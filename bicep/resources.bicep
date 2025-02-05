@@ -18,6 +18,8 @@ var amplsPrivateDnsZoneNames = [
   'privatelink.blob.${environment().suffixes.storage}'
 ]
 var aksClusterName = '${prefix}-aks'
+var app1AksNamespaceName = 'app1'
+var app1ServiceAccountName = 'app1'
 
 resource logAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   name: '${prefix}-log-analytics-workspace'
@@ -334,9 +336,7 @@ resource firewallPolicy 'Microsoft.Network/firewallPolicies@2024-05-01' = {
   name: '${prefix}-firewall-policy'
   location: location
   tags: tags
-  properties: {
-    threatIntelMode: 'Alert'
-  }
+  properties: {}
 }
 
 resource networkCollectionRule 'Microsoft.Network/firewallPolicies/ruleCollectionGroups@2024-05-01' = {
@@ -387,6 +387,16 @@ resource privateDnsZoneContributorRoleDefinition 'Microsoft.Authorization/roleDe
   name: 'b12aa53e-6015-4669-85d0-8515ebb3ae7f'
 }
 
+resource privateDnsZoneContributorAksAppRoutingRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid('app-routing-addon', aksCluster.id, privateDnsZone.id, privateDnsZoneContributorRoleDefinition.id)
+  scope: privateDnsZone
+  properties: {
+    principalId: aksCluster.properties.ingressProfile.webAppRouting.identity.objectId
+    roleDefinitionId: privateDnsZoneContributorRoleDefinition.id
+    principalType: 'ServicePrincipal'
+  }
+}
+
 resource privateDnsZoneLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = {
   name: virtualNetwork.name
   parent: privateDnsZone
@@ -404,6 +414,7 @@ resource aksIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-3
   location: location
   tags: tags
 }
+
 resource aksDataCollectionRule 'Microsoft.Insights/dataCollectionRules@2023-03-11' = {
   name: '${aksClusterName}-data-collection-rule'
   location: location
@@ -697,6 +708,34 @@ resource keyVaultSecretsUserRoleDefinition 'Microsoft.Authorization/roleDefiniti
   name: '4633458b-17de-408a-b874-0445c86b69e6'
 }
 
+resource keyVaultStorageAccountConnectionStringSecret 'Microsoft.KeyVault/vaults/secrets@2024-04-01-preview' = {
+  name: 'storage-account-connection-string'
+  parent: keyVault
+  properties: {
+    value: 'DefaultEndpointsProtocol=https;AccountName=${storageAccount.name};AccountKey=${storageAccount.listKeys().keys[0].value};EndpointSuffix=${environment().suffixes.storage}'
+  }
+}
+
+resource keyVaultSecretsUserApp1RoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(app1ManagedIdentity.id, keyVault.id, keyVaultSecretsUserRoleDefinition.id)
+  scope: keyVault
+  properties: {
+    principalId: app1ManagedIdentity.properties.principalId
+    roleDefinitionId: keyVaultSecretsUserRoleDefinition.id
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource keyVaultSecretsUserAksAppRoutingRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid('app-routing-addon', aksCluster.id, keyVault.id, keyVaultSecretsUserRoleDefinition.id)
+  scope: keyVault
+  properties: {
+    principalId: aksCluster.properties.ingressProfile.webAppRouting.identity.objectId
+    roleDefinitionId: keyVaultSecretsUserRoleDefinition.id
+    principalType: 'ServicePrincipal'
+  }
+}
+
 resource deployerKeyVaultCertificatesOfficerRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(deployer().objectId, keyVault.id, keyVaultCertificatesOfficerRoleDefinition.id)
   scope: keyVault
@@ -796,3 +835,30 @@ resource storageAccountPrivateEndpointDnsZoneGroup 'Microsoft.Network/privateEnd
     ]
   }
 }
+
+resource app1ManagedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: '${aksClusterName}-app1-identity'
+  location: location
+  tags: tags
+}
+
+resource app1ManagedIdentityFederatedCredentials 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-01-31' = {
+  name: '${aksClusterName}-federated-credentials'
+  parent: app1ManagedIdentity
+  properties: {
+    audiences: [
+      'api://AzureADTokenExchange'
+    ]
+    issuer: aksCluster.properties.oidcIssuerProfile.issuerURL
+    subject: 'system:serviceaccount:${app1AksNamespaceName}:${app1ServiceAccountName}'
+  }
+}
+
+output dnsZoneName string = privateDnsZone.name
+output aksClusterName string = aksCluster.name
+output keyVaultName string = keyVault.name
+output keyVaultUrl string = keyVault.properties.vaultUri
+output keyVaultStorageAccountConnectionStringSecretName string = keyVaultStorageAccountConnectionStringSecret.name
+output app1ManagedIdentityClientId string = app1ManagedIdentity.properties.clientId
+output app1AksNamespaceName string = app1AksNamespaceName
+output app1ServiceAccountName string = app1ServiceAccountName

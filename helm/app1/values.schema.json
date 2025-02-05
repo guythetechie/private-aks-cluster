@@ -1,0 +1,49 @@
+{
+    "$schema": "https://json-schema.org/draft-07/schema#",
+    "title": "Values",
+    "type": "object",
+    "properties": {
+        "dnsZoneName": {
+            "type": "string",
+            "minLength": 1
+        },
+        "keyVaultName": {
+            "type": "string",
+            "minLength": 1
+        },
+        "keyVaultCertificateUrl": {
+            "type": "string",
+            "minLength": 1
+        },
+        "keyVaultStorageAccountConnectionStringSecretName": {
+            "type": "string",
+            "minLength": 1
+        },
+        "keyVaultSecretProviderName": {
+            "type": "string",
+            "minLength": 1
+        },
+        "managedIdentityClientId": {
+            "type": "string",
+            "minLength": 1
+        },
+        "serviceAccountName": {
+            "type": "string",
+            "minLength": 1
+        },
+        "tenantId": {
+            "type": "string",
+            "minLength": 1
+        }
+    },
+    "required": [
+        "dnsZoneName",
+        "keyVaultName",
+        "keyVaultCertificateUrl",
+        "keyVaultStorageAccountConnectionStringSecretName",
+        "keyVaultSecretProviderName",
+        "managedIdentityClientId",
+        "serviceAccountName",
+        "tenantId"
+    ]
+}

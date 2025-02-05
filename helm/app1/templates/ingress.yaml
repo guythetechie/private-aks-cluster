@@ -1,0 +1,24 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  annotations:
+    kubernetes.azure.com/tls-cert-keyvault-uri: {{ .Values.keyVaultCertificateUrl }}
+  name: app1
+  namespace: {{ .Release.Namespace }}
+spec:
+  ingressClassName: nginx-internal
+  rules:
+  - host: app1.{{ .Values.dnsZoneName }}
+    http:
+      paths:
+      - backend:
+          service:
+            name: app1
+            port:
+              number: 80
+        path: /
+        pathType: Prefix
+  tls:
+  - hosts:
+    - app1.{{ .Values.dnsZoneName }}
+    secretName: keyvault-app1

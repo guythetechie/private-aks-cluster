@@ -1,5 +1,7 @@
 targetScope = 'subscription'
 
+param allowedIpAddresses string?
+
 var location = 'eastus2'
 var prefix = 'private-cluster'
 var shortPrefix = 'pc'
@@ -17,7 +19,18 @@ module resources 'resources.bicep' = {
   name: 'resources-deployment'
   params: {
     prefix: '${prefix}-${take(uniqueString(resourceGroup.id), 4)}'
+    allowedIpAddresses: map(split(allowedIpAddresses ?? '', ','), address => trim(address))
     shortPrefix: '${shortPrefix}-${take(uniqueString(resourceGroup.id), 4)}'
     shortAlphanumericPrefix: '${shortAlphanumericPrefix}${take(uniqueString(resourceGroup.id), 4)}'
   }
 }
+
+output aksClusterName string = resources.outputs.aksClusterName
+output app1ManagedIdentityClientId string = resources.outputs.app1ManagedIdentityClientId
+output app1AksNamespaceName string = resources.outputs.app1AksNamespaceName
+output app1ServiceAccountName string = resources.outputs.app1ServiceAccountName
+output dnsZoneName string = resources.outputs.dnsZoneName
+output keyVaultName string = resources.outputs.keyVaultName
+output keyVaultUrl string = resources.outputs.keyVaultUrl
+output keyVaultStorageAccountConnectionStringSecretName string = resources.outputs.keyVaultStorageAccountConnectionStringSecretName
+output resourceGroupName string = resourceGroup.name

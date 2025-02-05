@@ -1,0 +1,11 @@
+apiVersion: approuting.kubernetes.azure.com/v1alpha1
+kind: NginxIngressController
+metadata:
+  name: nginx-internal
+  namespace: {{ .Release.Namespace }}
+spec:
+  ingressClassName: nginx-internal
+  # defaultSSLCertificate:
+  #   keyVaultURI: {{ .Values.keyVaultCertificateUrl }}
+  loadBalancerAnnotations: 
+    service.beta.kubernetes.io/azure-load-balancer-internal: "true"

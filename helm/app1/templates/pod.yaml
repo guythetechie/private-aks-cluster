@@ -1,0 +1,33 @@
+kind: Pod
+apiVersion: v1
+metadata:
+  name: busybox-secrets-store-inline-wi
+  labels:
+    azure.workload.identity/use: "true"
+  namespace: {{ .Release.Namespace }}
+spec:
+  serviceAccountName: {{ .Values.serviceAccountName }}
+  containers:
+    - name: busybox
+      image: registry.k8s.io/e2e-test-images/busybox:1.29-4
+      command:
+        - "/bin/sleep"
+        - "10000"
+      volumeMounts:
+      - name: secrets-store01-inline
+        mountPath: "/mnt/secrets-store"
+        readOnly: true
+      resources:
+        requests:
+          cpu: 1m
+          memory: 200Mi
+        limits:
+          cpu: "1"
+          memory: 512Mi
+  volumes:
+    - name: secrets-store01-inline
+      csi:
+        driver: secrets-store.csi.k8s.io
+        readOnly: true
+        volumeAttributes:
+          secretProviderClass: {{ .Values.keyVaultSecretProviderName }}
