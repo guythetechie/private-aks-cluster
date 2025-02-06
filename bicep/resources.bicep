@@ -4,11 +4,17 @@ param shortPrefix string
 param shortAlphanumericPrefix string
 param tags object = {}
 param allowedIpAddresses array = []
+param virtualMachineAdminUsername string = take(replace(uniqueString(resourceGroup().id), '-', ''), 10)
+@secure()
+param virtualMachineAdminPassword string
 
 var privateLinkSubnetName = 'private-link'
 var aksApiSubnetName = 'aks-api'
 var aksNodeSubnetName = 'aks-node'
+var virtualMachineSubnetName = 'virtual-machine'
 var azureFirewallSubnetName = 'AzureFirewallSubnet'
+var bastionSubnetName = 'AzureBastionSubnet'
+var bastionName = '${prefix}-bastion'
 var azureFirewallPublicIpCount = 1
 var amplsPrivateDnsZoneNames = [
   'privatelink.monitor.azure.com'
@@ -20,6 +26,7 @@ var amplsPrivateDnsZoneNames = [
 var aksClusterName = '${prefix}-aks'
 var app1AksNamespaceName = 'app1'
 var app1ServiceAccountName = 'app1'
+var virtualMachineName = 'jump01-vm'
 
 resource logAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   name: '${prefix}-log-analytics-workspace'
@@ -188,6 +195,15 @@ resource virtualNetwork 'Microsoft.Network/virtualNetworks@2024-05-01' = {
         }
       }
       {
+        name: virtualMachineSubnetName
+        properties: {
+          addressPrefix: '10.0.0.48/29'
+          routeTable: {
+            id: routeTable.id
+          }
+        }
+      }
+      {
         name: aksNodeSubnetName
         properties: {
           addressPrefix: '10.0.0.64/26'
@@ -200,6 +216,12 @@ resource virtualNetwork 'Microsoft.Network/virtualNetworks@2024-05-01' = {
         name: azureFirewallSubnetName
         properties: {
           addressPrefix: '10.0.0.128/26'
+        }
+      }
+      {
+        name: bastionSubnetName
+        properties: {
+          addressPrefix: '10.0.0.192/26'
         }
       }
     ]
@@ -627,7 +649,7 @@ resource keyVault 'Microsoft.KeyVault/vaults@2024-04-01-preview' = {
 }
 
 resource keyVaultPrivateDnsZone 'Microsoft.Network/privateDnsZones@2024-06-01' = {
-  name: 'privatelink${environment().suffixes.keyvaultDns}'
+  name: 'privatelink${replace(environment().suffixes.keyvaultDns,'vault','vaultcore')}'
   location: 'global'
   tags: tags
   properties: {}
@@ -716,6 +738,14 @@ resource keyVaultStorageAccountConnectionStringSecret 'Microsoft.KeyVault/vaults
   }
 }
 
+resource keyVaultVirtualMachineAdminPasswordSecret 'Microsoft.KeyVault/vaults/secrets@2024-04-01-preview' = {
+  name: 'virtual-machine-admin-password'
+  parent: keyVault
+  properties: {
+    value: virtualMachineAdminPassword
+  }
+}
+
 resource keyVaultSecretsUserApp1RoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(app1ManagedIdentity.id, keyVault.id, keyVaultSecretsUserRoleDefinition.id)
   scope: keyVault
@@ -736,7 +766,16 @@ resource keyVaultSecretsUserAksAppRoutingRoleAssignment 'Microsoft.Authorization
   }
 }
 
-resource deployerKeyVaultCertificatesOfficerRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+resource keyVaultSecretsUserDeployerRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(deployer().objectId, keyVault.id, keyVaultSecretsUserRoleDefinition.id)
+  scope: keyVault
+  properties: {
+    principalId: deployer().objectId
+    roleDefinitionId: keyVaultSecretsUserRoleDefinition.id
+  }
+}
+
+resource keyVaultCertificatesOfficerDeployerRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(deployer().objectId, keyVault.id, keyVaultCertificatesOfficerRoleDefinition.id)
   scope: keyVault
   properties: {
@@ -851,6 +890,170 @@ resource app1ManagedIdentityFederatedCredentials 'Microsoft.ManagedIdentity/user
     ]
     issuer: aksCluster.properties.oidcIssuerProfile.issuerURL
     subject: 'system:serviceaccount:${app1AksNamespaceName}:${app1ServiceAccountName}'
+  }
+}
+
+resource bastionSubnet 'Microsoft.Network/virtualNetworks/subnets@2024-05-01' existing = {
+  name: bastionSubnetName
+  parent: virtualNetwork
+}
+
+resource bastionPublicIP 'Microsoft.Network/publicIPAddresses@2023-09-01' = {
+  name: '${bastionName}-public-ip'
+  location: location
+  tags: tags
+  sku: {
+    name: 'Standard'
+  }
+  zones: [
+    '1'
+    '2'
+    '3'
+  ]
+  properties: {
+    publicIPAllocationMethod: 'Static'
+  }
+}
+
+resource bastion 'Microsoft.Network/bastionHosts@2024-05-01' = {
+  name: bastionName
+  location: location
+  tags: tags
+  sku: {
+    name: 'Basic'
+  }
+  zones: [
+    '1'
+    '2'
+    '3'
+  ]
+  properties: {
+    ipConfigurations: [
+      {
+        name: 'default'
+        properties: {
+          subnet: {
+            id: bastionSubnet.id
+          }
+          publicIPAddress: {
+            id: bastionPublicIP.id
+          }
+        }
+      }
+    ]
+  }
+}
+
+resource virtualMachineSubnet 'Microsoft.Network/virtualNetworks/subnets@2024-05-01' existing = {
+  name: virtualMachineSubnetName
+  parent: virtualNetwork
+}
+
+resource virtualMachineNetworkInterface 'Microsoft.Network/networkInterfaces@2024-05-01' = {
+  name: '${virtualMachineName}-nic'
+  location: location
+  tags: tags
+  properties: {
+    ipConfigurations: [
+      {
+        name: 'default'
+        properties: {
+          subnet: {
+            id: virtualMachineSubnet.id
+          }
+          privateIPAllocationMethod: 'Dynamic'
+        }
+      }
+    ]
+    enableAcceleratedNetworking: true
+  }
+}
+
+resource virtualMachine 'Microsoft.Compute/virtualMachines@2024-07-01' = {
+  name: virtualMachineName
+  location: location
+  tags: tags
+  identity: {
+    type: 'SystemAssigned'
+  }
+  properties: {
+    hardwareProfile: {
+      vmSize: 'Standard_D2ads_v6'
+    }
+    storageProfile: {
+      imageReference: {
+        publisher: 'MicrosoftWindowsServer'
+        offer: 'WindowsServer'
+        sku: '2022-datacenter-azure-edition-hotpatch'
+        version: 'latest'
+      }
+      osDisk: {
+        createOption: 'FromImage'
+        managedDisk: {
+          storageAccountType: 'StandardSSD_LRS'
+        }
+        deleteOption: 'Delete'
+      }
+    }
+    networkProfile: {
+      networkInterfaces: [
+        {
+          id: virtualMachineNetworkInterface.id
+          properties: {
+            deleteOption: 'Delete'
+          }
+        }
+      ]
+    }
+    securityProfile: {
+      securityType: 'TrustedLaunch'
+      uefiSettings: {
+        secureBootEnabled: true
+        vTpmEnabled: true
+      }
+    }
+    osProfile: {
+      computerName: virtualMachineName
+      adminUsername: virtualMachineAdminUsername
+      adminPassword: virtualMachineAdminPassword
+      windowsConfiguration: {
+        enableAutomaticUpdates: true
+        provisionVMAgent: true
+        patchSettings: {
+          assessmentMode: 'AutomaticByPlatform'
+          enableHotpatching: true
+          patchMode: 'AutomaticByPlatform'
+          automaticByPlatformSettings: {
+            rebootSetting: 'IfRequired'
+          }
+        }
+      }
+    }
+    priority: 'Spot'
+    evictionPolicy: 'Delete'
+    billingProfile: {
+      maxPrice: -1
+    }
+    diagnosticsProfile: {
+      bootDiagnostics: {
+        enabled: true
+      }
+    }
+  }
+}
+
+resource virtualMachineAadLoginExtension 'Microsoft.Compute/virtualMachines/extensions@2024-07-01' = {
+  name: 'AADLoginForWindows'
+  parent: virtualMachine
+  location: location
+  properties: {
+    publisher: 'Microsoft.Azure.ActiveDirectory'
+    type: 'AADLoginForWindows'
+    typeHandlerVersion: '1.0'
+    autoUpgradeMinorVersion: true
+    settings: {
+      mdmId: ''
+    }
   }
 }
 

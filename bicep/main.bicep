@@ -1,6 +1,8 @@
 targetScope = 'subscription'
 
 param allowedIpAddresses string?
+@secure()
+param virtualMachineAdminPassword string = '${newGuid()}2@'
 
 var location = 'eastus2'
 var prefix = 'private-cluster'
@@ -22,6 +24,8 @@ module resources 'resources.bicep' = {
     allowedIpAddresses: map(split(allowedIpAddresses ?? '', ','), address => trim(address))
     shortPrefix: '${shortPrefix}-${take(uniqueString(resourceGroup.id), 4)}'
     shortAlphanumericPrefix: '${shortAlphanumericPrefix}${take(uniqueString(resourceGroup.id), 4)}'
+    tags: tags
+    virtualMachineAdminPassword: virtualMachineAdminPassword
   }
 }
 

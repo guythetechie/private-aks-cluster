@@ -16,14 +16,16 @@ fi
 # Create deployment stack
 echo "Creating deployment stack..."
 CURRENT_IP_ADDRESS=$(curl -s ifconfig.me)
-# az stack sub create \
-#     --action-on-unmanage "detachAll" \
-#     --deny-settings-mode none \
-#     --location "eastus2" \
-#     --name "$DEPLOYMENT_STACK_NAME" \
-#     --template-file "./bicep/main.bicep" \
-#     --parameters allowedIpAddresses="$CURRENT_IP_ADDRESS" \
-#     --yes
+VIRTUAL_MACHINE_ADMIN_PASSWORD=$(openssl rand -base64 16)
+az stack sub create \
+    --action-on-unmanage "detachAll" \
+    --deny-settings-mode none \
+    --location "eastus2" \
+    --name "$DEPLOYMENT_STACK_NAME" \
+    --template-file "./bicep/main.bicep" \
+    --parameters allowedIpAddresses="$CURRENT_IP_ADDRESS" \
+    --parameters virtualMachineAdminPassword="$VIRTUAL_MACHINE_ADMIN_PASSWORD" \
+    --yes
 
 # Create app1 Key Vault certificate
 DEPLOYMENT_STACK=$(az stack sub show --name "$DEPLOYMENT_STACK_NAME")
@@ -33,7 +35,7 @@ APP1_KEY_VAULT_CERTIFICATE_NAME="app1-certificate"
 # If the certificate already exists, get its url; otherwise, create it.az
 APP1_KEY_VAULT_CERTIFICATE_URL=$(az keyvault certificate list \
                                     --vault-name "$KEY_VAULT_NAME" \
-                                    --query "[?name=='$APP1_KEY_VAULT_CERTIFICATE_NAME'].name" \
+                                    --query "[?name=='$APP1_KEY_VAULT_CERTIFICATE_NAME'].target" \
                                     --output tsv)
 if [[ -z "$APP1_KEY_VAULT_CERTIFICATE_URL" ]]; then
     echo "Creating app1 Key Vault certificate..."
@@ -56,7 +58,6 @@ SERVICE_ACCOUNT_NAME=$(echo "$DEPLOYMENT_STACK" | jq -r '.outputs.app1ServiceAcc
 TENANT_ID=$(az account show --query "tenantId" --output tsv)
 HELM_COMMAND="helm upgrade \"app1\" . \\
                 --install \\
-                --atomic \\
                 --namespace \"$AKS_NAMESPACE_NAME\" \\
                 --create-namespace \\
                 --set dnsZoneName=\"$DNS_ZONE_NAME\" \\
