@@ -73,7 +73,24 @@ if [[ -z "$APP1_KEY_VAULT_CERTIFICATE_URL" ]]; then
                                         --output tsv)
 fi
 
+# Import Elastic Docker images
+echo "Importing Elastic Docker images..."
+CONTAINER_REGISTRY_NAME=$(echo "$DEPLOYMENT_STACK" | jq -r '.outputs.containerRegistryName.value')
+RESOURCE_GROUP_NAME=$(echo "$DEPLOYMENT_STACK" | jq -r '.outputs.resourceGroupName.value')
+ELASTIC_VERSION="8.17.2"
+for image in "docker.elastic.co/elasticsearch/elasticsearch:$ELASTIC_VERSION" \
+            "docker.elastic.co/kibana/kibana:$ELASTIC_VERSION" \
+            "docker.elastic.co/apm/apm-server:$ELASTIC_VERSION" \
+            "docker.elastic.co/eck/eck-operator:2.16.1"; do
+    az acr import \
+    --name "$CONTAINER_REGISTRY_NAME" \
+    --resource-group "$RESOURCE_GROUP_NAME" \
+    --source "$image" \
+    --force &
+done
+
 echo "Deploying common Helm chart..."
+AKS_CLUSTER_NAME=$(echo "$DEPLOYMENT_STACK" | jq -r '.outputs.aksClusterName.value')
 HELM_COMMAND="helm upgrade \"common\" . \\
                 --install \\
                 --atomic \\
@@ -86,8 +103,10 @@ az aks command invoke \
     --command "$HELM_COMMAND"
 
 echo "Deploying Helm chart..."
+cd "./helm/app1/"
 AKS_CLUSTER_NAME=$(echo "$DEPLOYMENT_STACK" | jq -r '.outputs.aksClusterName.value')
 AKS_NAMESPACE_NAME=$(echo "$DEPLOYMENT_STACK" | jq -r '.outputs.app1AksNamespaceName.value')
+CONTAINER_REGISTRY_FQDN=$(echo "$DEPLOYMENT_STACK" | jq -r '.outputs.containerRegistryFqdn.value')
 DNS_ZONE_NAME=$(echo "$DEPLOYMENT_STACK" | jq -r '.outputs.dnsZoneName.value')
 KEY_VAULT_STORAGE_ACCOUNT_CONNECTION_STRING_SECRET_NAME=$(echo "$DEPLOYMENT_STACK" | jq -r '.outputs.keyVaultStorageAccountConnectionStringSecretName.value')
 MANAGED_IDENTITY_CLIENT_ID=$(echo "$DEPLOYMENT_STACK" | jq -r '.outputs.app1ManagedIdentityClientId.value')
@@ -96,9 +115,12 @@ SERVICE_ACCOUNT_NAME=$(echo "$DEPLOYMENT_STACK" | jq -r '.outputs.app1ServiceAcc
 TENANT_ID=$(az account show --query "tenantId" --output tsv)
 HELM_COMMAND="helm upgrade \"app1\" . \\
                 --install \\
+                --debug \\
                 --namespace \"$AKS_NAMESPACE_NAME\" \\
                 --create-namespace \\
+                --set containerRegistryFqdn=\"$CONTAINER_REGISTRY_FQDN\" \\
                 --set dnsZoneName=\"$DNS_ZONE_NAME\" \\
+                --set elasticVersion=\"$ELASTIC_VERSION\" \\
                 --set keyVaultName=\"$KEY_VAULT_NAME\" \\
                 --set keyVaultCertificateUrl=\"$APP1_KEY_VAULT_CERTIFICATE_URL\" \\
                 --set keyVaultSecretProviderName=\"app1-keyvault-secret-provider\" \\
@@ -106,7 +128,6 @@ HELM_COMMAND="helm upgrade \"app1\" . \\
                 --set managedIdentityClientId=\"$MANAGED_IDENTITY_CLIENT_ID\" \\
                 --set serviceAccountName=\"$SERVICE_ACCOUNT_NAME\" \\
                 --set tenantId=\"$TENANT_ID\""
-cd "./helm/app1/"
 az aks command invoke \
     --resource-group "$RESOURCE_GROUP_NAME" \
     --name "$AKS_CLUSTER_NAME" \

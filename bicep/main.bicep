@@ -2,9 +2,9 @@ targetScope = 'subscription'
 
 import { getPrefix, getAlphanumericPrefix } from 'functions.bicep'
 
-param applicationName string
+param applicationName string = 'private-aks'
 param tags object = {}
-param location string
+param location string = 'westus3'
 param allowedIpAddresses string?
 @secure()
 param virtualMachineAdminPassword string = '${newGuid()}2@'
@@ -39,10 +39,22 @@ var privateDnsZones = {
     isAmpls: false
   }
   keyVault: {
-    name: 'privatelink.${environment().suffixes.keyvaultDns}'
+    name: 'privatelink${environment().suffixes.keyvaultDns}'
+    isAmpls: false
+  }
+  containerRegistry: {
+    name: 'privatelink.azurecr.io'
     isAmpls: false
   }
 }
+
+var blobPrivateDnsZoneResourceId = privateDnsZonesDeployment[indexOfKey(privateDnsZones, 'blob')].outputs.resourceId
+var keyVaultPrivateDnsZoneResourceId = privateDnsZonesDeployment[indexOfKey(privateDnsZones, 'keyVault')].outputs.resourceId
+var aksPrivateDnsZoneResourceId = privateDnsZonesDeployment[indexOfKey(privateDnsZones, 'aks')].outputs.resourceId
+var containerRegistryPrivateDnsZoneResourceId = privateDnsZonesDeployment[indexOfKey(
+  privateDnsZones,
+  'containerRegistry'
+)].outputs.resourceId
 
 var subnets = {
   privateLink: {
@@ -73,10 +85,16 @@ var subnets = {
   }
   bastion: {
     name: 'AzureBastionSubnet'
-    addressPrefix: '10.0.0.128/26'
+    addressPrefix: '10.0.0.192/26'
     routeThroughFirewall: false
   }
 }
+
+var subnetResourceIds = virtualNetwork.outputs.subnetResourceIds
+var privateLinkSubnetResourceId = subnetResourceIds[indexOfKey(subnets, 'privateLink')]
+var aksApiSubnetResourceId = subnetResourceIds[indexOfKey(subnets, 'aksApi')]
+var virtualMachineSubnetResourceId = subnetResourceIds[indexOfKey(subnets, 'virtualMachine')]
+var aksNodeSubnetResourceId = subnetResourceIds[indexOfKey(subnets, 'aksNode')]
 
 var app1AksNamespaceName = 'app1'
 var app1ServiceAccountName = 'app1'
@@ -132,7 +150,7 @@ module amplsPrivateEndpoint 'br/public:avm/res/network/private-endpoint:0.10.1' 
     name: '${ampls.outputs.name}-azuremonitor-private-endpoint'
     location: location
     tags: tags
-    subnetResourceId: privateLinkSubnet.id
+    subnetResourceId: privateLinkSubnetResourceId
     customNetworkInterfaceName: '${ampls.outputs.name}-azuremonitor-nic'
     privateLinkServiceConnections: [
       {
@@ -169,17 +187,12 @@ module privateDnsZonesDeployment 'br/public:avm/res/network/private-dns-zone:0.7
       tags: tags
       virtualNetworkLinks: [
         {
-          virtualNetworkResourceId: virtualNetwork.id
+          virtualNetworkResourceId: virtualNetwork.outputs.resourceId
         }
       ]
     }
   }
 ]
-
-resource aksPrivateDnsZone 'Microsoft.Network/privateDnsZones@2024-06-01' existing = {
-  name: privateDnsZonesDeployment[indexOfKey(privateDnsZones, 'aks')].outputs.name
-  scope: resourceGroup
-}
 
 resource privateDnsZoneContributorRoleDefinition 'Microsoft.Authorization/roleDefinitions@2018-01-01-preview' existing = {
   scope: subscription()
@@ -190,9 +203,9 @@ module privateDnsZoneContributorAksAppRoutingRoleAssignment 'br/public:avm/ptn/a
   scope: resourceGroup
   name: 'private-dns-zone-contributor-aks-app-routing-role-assignment'
   params: {
-    name: guid(aks.outputs.ingressPrincipalId, aksPrivateDnsZone.id, privateDnsZoneContributorRoleDefinition.id)
+    name: guid(aks.outputs.ingressPrincipalId, aksPrivateDnsZoneResourceId, privateDnsZoneContributorRoleDefinition.id)
     principalId: aks.outputs.ingressPrincipalId
-    resourceId: aksPrivateDnsZone.id
+    resourceId: aksPrivateDnsZoneResourceId
     roleDefinitionId: privateDnsZoneContributorRoleDefinition.id
   }
 }
@@ -289,7 +302,7 @@ resource networkContributorRoleDefinition 'Microsoft.Authorization/roleDefinitio
   scope: subscription()
 }
 
-module virtualNetworkDeployment 'br/public:avm/res/network/virtual-network:0.5.2' = {
+module virtualNetwork 'br/public:avm/res/network/virtual-network:0.5.2' = {
   scope: resourceGroup
   name: 'virtual-network'
   params: {
@@ -318,53 +331,28 @@ module vnetFlowLogs 'vnet-flow-logs.bicep' = {
     logAnalyticsWorkspaceId: logAnalyticsWorkspace.outputs.resourceId
     networkWatcherName: 'NetworkWatcher_${location}'
     storageAccountId: storageAccount.outputs.resourceId
-    virtualNetworkId: virtualNetwork.id
+    virtualNetworkId: virtualNetwork.outputs.resourceId
   }
-}
-
-resource virtualNetwork 'Microsoft.Network/virtualNetworks@2024-05-01' existing = {
-  name: virtualNetworkDeployment.outputs.name
-  scope: resourceGroup
-}
-
-resource privateLinkSubnet 'Microsoft.Network/virtualNetworks/subnets@2024-05-01' existing = {
-  name: subnets.privateLink.name
-  parent: virtualNetwork
-}
-
-resource aksApiSubnet 'Microsoft.Network/virtualNetworks/subnets@2024-05-01' existing = {
-  name: subnets.aksApi.name
-  parent: virtualNetwork
-}
-
-resource virtualMachineSubnet 'Microsoft.Network/virtualNetworks/subnets@2024-05-01' existing = {
-  name: subnets.virtualMachine.name
-  parent: virtualNetwork
 }
 
 module aksIdentityApiSubnetRoleAssignment 'br/public:avm/ptn/authorization/resource-role-assignment:0.1.2' = {
   scope: resourceGroup
   name: 'aks-api-subnet-role-assignment'
   params: {
-    name: guid(aksIdentity.outputs.principalId, aksApiSubnet.id, networkContributorRoleDefinition.id)
+    name: guid(aksIdentity.outputs.principalId, aksApiSubnetResourceId, networkContributorRoleDefinition.id)
     principalId: aksIdentity.outputs.principalId
-    resourceId: aksApiSubnet.id
+    resourceId: aksApiSubnetResourceId
     roleDefinitionId: networkContributorRoleDefinition.id
   }
-}
-
-resource aksNodeSubnet 'Microsoft.Network/virtualNetworks/subnets@2024-05-01' existing = {
-  name: subnets.aksNode.name
-  parent: virtualNetwork
 }
 
 module aksIdentityNodeSubnetRoleAssignment 'br/public:avm/ptn/authorization/resource-role-assignment:0.1.2' = {
   scope: resourceGroup
   name: 'aks-node-subnet-role-assignment'
   params: {
-    name: guid(aksIdentity.outputs.principalId, aksNodeSubnet.id, networkContributorRoleDefinition.id)
+    name: guid(aksIdentity.outputs.principalId, aksNodeSubnetResourceId, networkContributorRoleDefinition.id)
     principalId: aksIdentity.outputs.principalId
-    resourceId: aksNodeSubnet.id
+    resourceId: aksNodeSubnetResourceId
     roleDefinitionId: networkContributorRoleDefinition.id
   }
 }
@@ -393,9 +381,10 @@ module firewall 'br/public:avm/res/network/azure-firewall:0.5.2' = {
     name: firewallName
     location: location
     tags: tags
-    azureSkuTier: 'Basic'
+    azureSkuTier: 'Standard'
+    firewallPolicyId: firewallPolicy.outputs.resourceId
     publicIPResourceID: firewallPublicIp.outputs.resourceId
-    virtualNetworkResourceId: virtualNetwork.id
+    virtualNetworkResourceId: virtualNetwork.outputs.resourceId
     diagnosticSettings: [
       {
         name: 'enable-all'
@@ -473,11 +462,11 @@ module aks 'aks.bicep' = {
     name: '${getPrefix(applicationName, resourceGroup.id)}-aks'
     location: location
     tags: tags
-    apiSubnetResourceId: aksApiSubnet.id
+    apiSubnetResourceId: aksApiSubnetResourceId
     identityResourceId: aksIdentity.outputs.resourceId
     logAnalyticsWorkspaceResourceId: logAnalyticsWorkspace.outputs.resourceId
-    nodeSubnetResourceId: aksNodeSubnet.id
-    privateDnsZoneResourceId: aksPrivateDnsZone.id
+    nodeSubnetResourceId: aksNodeSubnetResourceId
+    privateDnsZoneResourceId: aksPrivateDnsZoneResourceId
     dataCollectionRuleAssociations: [
       {
         name: 'configurationAccessEndpoint'
@@ -488,6 +477,73 @@ module aks 'aks.bicep' = {
         dataCollectionRuleId: aksDataCollectionRule.outputs.resourceId
       }
     ]
+  }
+}
+
+module containerRegistry 'br/public:avm/res/container-registry/registry:0.9.0' = {
+  scope: resourceGroup
+  name: 'container-registry'
+  params: {
+    name: '${getAlphanumericPrefix(applicationName, resourceGroup.id)}containerregistry'
+    location: location
+    tags: tags
+    acrAdminUserEnabled: false
+    acrSku: 'Premium'
+    publicNetworkAccess: 'Disabled'
+    networkRuleBypassOptions: 'AzureServices'
+    networkRuleSetIpRules: [
+      {
+        value: allowedIpAddresses
+      }
+    ]
+  }
+}
+
+module containerRegistryPrivateEndpoint 'br/public:avm/res/network/private-endpoint:0.10.1' = {
+  scope: resourceGroup
+  name: 'container-registry-private-endpoint'
+  params: {
+    name: '${containerRegistry.outputs.name}-registry-private-endpoint'
+    location: location
+    tags: tags
+    subnetResourceId: privateLinkSubnetResourceId
+    customNetworkInterfaceName: '${containerRegistry.outputs.name}-registry-nic'
+    privateLinkServiceConnections: [
+      {
+        name: 'registry'
+        properties: {
+          privateLinkServiceId: containerRegistry.outputs.resourceId
+          groupIds: [
+            'registry'
+          ]
+        }
+      }
+    ]
+    privateDnsZoneGroup: {
+      name: 'private-dns-zone-group'
+      privateDnsZoneGroupConfigs: [
+        {
+          name: privateDnsZones.containerRegistry.name
+          privateDnsZoneResourceId: containerRegistryPrivateDnsZoneResourceId
+        }
+      ]
+    }
+  }
+}
+
+resource acrPullRoleDefinition 'Microsoft.Authorization/roleDefinitions@2022-04-01' existing = {
+  scope: subscription()
+  name: '7f951dda-4ed3-4680-a7ca-43fe172d538d'
+}
+
+module aksAcrPullRoleAssignment 'br/public:avm/ptn/authorization/resource-role-assignment:0.1.2' = {
+  scope: resourceGroup
+  name: 'aks-acr-pull-role-assignment'
+  params: {
+    name: guid(aks.outputs.kubeletIdentityPrincipalId, containerRegistry.outputs.resourceId, acrPullRoleDefinition.id)
+    principalId: aks.outputs.kubeletIdentityPrincipalId
+    resourceId: containerRegistry.outputs.resourceId
+    roleDefinitionId: acrPullRoleDefinition.id
   }
 }
 
@@ -530,9 +586,20 @@ module keyVault 'br/public:avm/res/key-vault/vault:0.6.1' = {
   }
 }
 
-resource keyVaultPrivateDnsZone 'Microsoft.Network/privateDnsZones@2024-06-01' existing = {
-  name: privateDnsZonesDeployment[indexOfKey(privateDnsZones, 'keyVault')].outputs.name
+resource keyVaultCertificatesOfficerRoleDefinition 'Microsoft.Authorization/roleDefinitions@2022-04-01' existing = {
+  scope: subscription()
+  name: 'a4417e6f-fecd-4de8-b567-7b0420556985'
+}
+
+module deployerKeyVaultCertificatesOfficerRoleAssignment 'br/public:avm/ptn/authorization/resource-role-assignment:0.1.2' = {
   scope: resourceGroup
+  name: 'deployer-key-vault-certificates-officer-role-assignment'
+  params: {
+    name: guid(deployer().objectId, keyVault.outputs.resourceId, keyVaultCertificatesOfficerRoleDefinition.id)
+    principalId: deployer().objectId
+    resourceId: keyVault.outputs.resourceId
+    roleDefinitionId: keyVaultCertificatesOfficerRoleDefinition.id
+  }
 }
 
 module keyVaultPrivateEndpoint 'br/public:avm/res/network/private-endpoint:0.10.1' = {
@@ -542,13 +609,13 @@ module keyVaultPrivateEndpoint 'br/public:avm/res/network/private-endpoint:0.10.
     name: '${keyVault.outputs.name}-vault-private-endpoint'
     location: location
     tags: tags
-    subnetResourceId: privateLinkSubnet.id
+    subnetResourceId: privateLinkSubnetResourceId
     customNetworkInterfaceName: '${ampls.outputs.name}-vault-nic'
     privateLinkServiceConnections: [
       {
         name: 'vault'
         properties: {
-          privateLinkServiceId: ampls.outputs.resourceId
+          privateLinkServiceId: keyVault.outputs.resourceId
           groupIds: [
             'vault'
           ]
@@ -559,8 +626,8 @@ module keyVaultPrivateEndpoint 'br/public:avm/res/network/private-endpoint:0.10.
       name: 'private-dns-zone-group'
       privateDnsZoneGroupConfigs: [
         {
-          name: keyVaultPrivateDnsZone.name
-          privateDnsZoneResourceId: keyVaultPrivateDnsZone.id
+          name: privateDnsZones.keyVault.name
+          privateDnsZoneResourceId: keyVaultPrivateDnsZoneResourceId
         }
       ]
     }
@@ -601,11 +668,6 @@ module storageAccountBlobServicesDiagnosticSettings 'storage-account-blob-diagno
   }
 }
 
-resource storageAccountBlobPrivateDnsZone 'Microsoft.Network/privateDnsZones@2024-06-01' existing = {
-  name: privateDnsZonesDeployment[indexOfKey(privateDnsZones, 'blob')].outputs.name
-  scope: resourceGroup
-}
-
 module storageAccountBlobPrivateEndpoint 'br/public:avm/res/network/private-endpoint:0.10.1' = {
   scope: resourceGroup
   name: 'storage-account-private-endpoint'
@@ -613,7 +675,7 @@ module storageAccountBlobPrivateEndpoint 'br/public:avm/res/network/private-endp
     name: '${storageAccount.outputs.name}-blob-private-endpoint'
     location: location
     tags: tags
-    subnetResourceId: privateLinkSubnet.id
+    subnetResourceId: privateLinkSubnetResourceId
     customNetworkInterfaceName: '${storageAccount.outputs.name}-blob-nic'
     privateLinkServiceConnections: [
       {
@@ -630,8 +692,8 @@ module storageAccountBlobPrivateEndpoint 'br/public:avm/res/network/private-endp
       name: 'private-dns-zone-group'
       privateDnsZoneGroupConfigs: [
         {
-          name: storageAccountBlobPrivateDnsZone.name
-          privateDnsZoneResourceId: storageAccountBlobPrivateDnsZone.id
+          name: privateDnsZones.blob.name
+          privateDnsZoneResourceId: blobPrivateDnsZoneResourceId
         }
       ]
     }
@@ -683,7 +745,7 @@ module bastion 'br/public:avm/res/network/bastion-host:0.6.0' = {
     location: location
     tags: tags
     bastionSubnetPublicIpResourceId: bastionPublicIp.outputs.resourceId
-    virtualNetworkResourceId: virtualNetwork.id
+    virtualNetworkResourceId: virtualNetwork.outputs.resourceId
   }
 }
 
@@ -697,6 +759,7 @@ module jumpVirtualMachine 'br/public:avm/res/compute/virtual-machine:0.12.0' = {
     adminUsername: 'jumpvmadmin'
     adminPassword: virtualMachineAdminPassword
     bootDiagnostics: true
+    encryptionAtHost: false
     imageReference: {
       publisher: 'MicrosoftWindowsServer'
       offer: 'WindowsServer'
@@ -709,13 +772,15 @@ module jumpVirtualMachine 'br/public:avm/res/compute/virtual-machine:0.12.0' = {
         ipConfigurations: [
           {
             name: 'default'
-            subnetResourceId: virtualMachineSubnet.id
+            subnetResourceId: virtualMachineSubnetResourceId
           }
         ]
         nicSuffix: '-nic'
       }
     ]
     osDisk: {
+      createOption: 'FromImage'
+      diskSizeGB: 128
       managedDisk: {
         storageAccountType: 'StandardSSD_LRS'
       }
@@ -723,6 +788,9 @@ module jumpVirtualMachine 'br/public:avm/res/compute/virtual-machine:0.12.0' = {
     osType: 'Windows'
     vmSize: 'Standard_D2ads_v6'
     zone: 0
+    securityType: 'TrustedLaunch'
+    secureBootEnabled: true
+    vTpmEnabled: true
   }
 }
 
@@ -730,8 +798,10 @@ output aksClusterName string = aks.outputs.name
 output app1ManagedIdentityClientId string = app1ManagedIdentity.outputs.principalId
 output app1AksNamespaceName string = app1AksNamespaceName
 output app1ServiceAccountName string = app1ServiceAccountName
-output dnsZoneName string = aksPrivateDnsZone.name
+output dnsZoneName string = privateDnsZones.aks.name
 output keyVaultName string = keyVault.outputs.name
 output keyVaultUrl string = keyVault.outputs.uri
 output keyVaultStorageAccountConnectionStringSecretName string = keyVaultStorageAccountConnectionStringSecretName
 output resourceGroupName string = resourceGroup.name
+output containerRegistryName string = containerRegistry.outputs.name
+output containerRegistryFqdn string = containerRegistry.outputs.loginServer

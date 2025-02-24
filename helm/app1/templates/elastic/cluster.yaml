@@ -1,0 +1,10 @@
+apiVersion: elasticsearch.k8s.elastic.co/v1
+kind: Elasticsearch
+metadata:
+  name: elastic
+  namespace: {{ .Release.Namespace }}
+spec:
+  version: {{ .Values.elasticVersion }}
+  nodeSets:
+  - name: default
+    count: 1
