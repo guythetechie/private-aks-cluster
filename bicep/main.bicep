@@ -234,6 +234,7 @@ module aksDataCollectionRule 'br/public:avm/res/insights/data-collection-rule:0.
         {
           streams: [
             'Microsoft-ContainerInsights-Group-Default'
+            'Microsoft-Syslog'
           ]
           destinations: [
             logAnalyticsWorkspace.outputs.name
@@ -257,7 +258,46 @@ module aksDataCollectionRule 'br/public:avm/res/insights/data-collection-rule:0.
             extensionName: 'ContainerInsights'
           }
         ]
-        syslog: []
+        syslog: [
+          {
+            name: 'sysLogsDataSource'
+            streams: [
+              'Microsoft-Syslog'
+            ]
+            facilityNames: [
+              'auth'
+              'authpriv'
+              'cron'
+              'daemon'
+              'mark'
+              'kern'
+              'local0'
+              'local1'
+              'local2'
+              'local3'
+              'local4'
+              'local5'
+              'local6'
+              'local7'
+              'lpr'
+              'mail'
+              'news'
+              'syslog'
+              'user'
+              'uucp'
+            ]
+            logLevels: [
+              'Debug'
+              'Info'
+              'Notice'
+              'Warning'
+              'Error'
+              'Critical'
+              'Alert'
+              'Emergency'
+            ]
+          }
+        ]
       }
       destinations: {
         logAnalytics: [
@@ -763,7 +803,7 @@ module jumpVirtualMachine 'br/public:avm/res/compute/virtual-machine:0.12.0' = {
     imageReference: {
       publisher: 'MicrosoftWindowsServer'
       offer: 'WindowsServer'
-      sku: '2022-datacenter-azure-edition-hotpatch'
+      sku: '2025-datacenter-azure-edition'
       version: 'latest'
     }
     priority: 'Spot'

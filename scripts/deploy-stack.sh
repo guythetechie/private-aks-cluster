@@ -89,12 +89,15 @@ for image in "docker.elastic.co/elasticsearch/elasticsearch:$ELASTIC_VERSION" \
     --force &
 done
 
-echo "Deploying common Helm chart..."
+echo "Deploying Elastic Helm chart..."
 AKS_CLUSTER_NAME=$(echo "$DEPLOYMENT_STACK" | jq -r '.outputs.aksClusterName.value')
-HELM_COMMAND="helm upgrade \"common\" . \\
+CONTAINER_REGISTRY_FQDN=$(echo "$DEPLOYMENT_STACK" | jq -r '.outputs.containerRegistryFqdn.value')
+HELM_COMMAND="helm upgrade \"elastic\" . \\
                 --install \\
-                --atomic \\
-                --namespace \"common\" \\
+                --debug \\
+                --namespace \"elastic-system\" \\
+                --set containerRegistryFqdn=\"$CONTAINER_REGISTRY_FQDN\" \\
+                --set elasticVersion=\"$ELASTIC_VERSION\" \\
                 --create-namespace"
 az aks command invoke \
     --resource-group "$RESOURCE_GROUP_NAME" \
